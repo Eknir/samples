@@ -1,0 +1,15 @@
+
+[91m   ______               __
+  / ____/     _________/ /___ _
+ / /     __  / ___/ __  / __ `/         [94mSome bankers are generous ...
+[91m/ /___  /_/ / /  / /_/ / /_/ /          [94mto a vault! 💰   😎  
+[91m\____/     /_/   \__,_/\__,_/[m
+
+[99;1m--- Corda Open Source 3.3-corda (c834162) -----------------------------------------------
+
+[m
+Logs can be found in                    : /Users/rinke/Projects/corda/samples/cordapp-example/kotlin-source/build/nodes/PartyC/logs
+[91m😴  Your computer took over a second to resolve localhost due an incorrect configuration. Corda will work but start very slowly until this is fixed. 
+😴  Please see https://docs.corda.net/troubleshooting.html#slow-localhost-resolution for information on how to fix this. 
+😴  It will only take a few seconds for you to resolve.
+[mDatabase connection url is              : jdbc:h2:tcp://192.168.34.54:57047/node

@@ -1,5 +1,6 @@
 package com.example.flow
 
+import com.google.common.collect.ImmutableList
 import co.paralleluniverse.fibers.Suspendable
 import com.example.contract.IOUContract
 import com.example.contract.IOUContract.Companion.IOU_CONTRACT_ID
@@ -7,9 +8,13 @@ import com.example.flow.ExampleFlow.Acceptor
 import com.example.flow.ExampleFlow.Initiator
 import com.example.state.IOUState
 import net.corda.core.contracts.Command
+import net.corda.core.contracts.UniqueIdentifier
 import net.corda.core.contracts.requireThat
 import net.corda.core.flows.*
 import net.corda.core.identity.Party
+import net.corda.core.node.services.Vault
+import net.corda.core.node.services.queryBy
+import net.corda.core.node.services.vault.QueryCriteria
 import net.corda.core.transactions.SignedTransaction
 import net.corda.core.transactions.TransactionBuilder
 import net.corda.core.utilities.ProgressTracker
@@ -27,6 +32,63 @@ import net.corda.core.utilities.ProgressTracker.Step
  * All methods called within the [FlowLogic] sub-class need to be annotated with the @Suspendable annotation.
  */
 object ExampleFlow {
+
+    @InitiatingFlow
+    @StartableByRPC
+
+    // get the previous tx as an input here
+    class Destroyer(val IOUId: UniqueIdentifier) : FlowLogic<SignedTransaction>() {
+        companion object {
+            object GENERATING_TRANSACTION : Step("Generating transaction based on new IOU.")
+            object VERIFYING_TRANSACTION : Step("Verifying contract constraints.")
+            object SIGNING_TRANSACTION : Step("Signing transaction with our private key.")
+            object FINALISING_TRANSACTION : Step("Obtaining notary signature and recording transaction.") {
+                override fun childProgressTracker() = FinalityFlow.tracker()
+            }
+            fun tracker() = ProgressTracker(
+                    GENERATING_TRANSACTION,
+                    VERIFYING_TRANSACTION,
+                    SIGNING_TRANSACTION,
+                    FINALISING_TRANSACTION
+            )
+        }
+        override val progressTracker = tracker()
+
+        @Suspendable
+        override fun call(): SignedTransaction {
+
+            // Stage 1: Generation Transaction
+            progressTracker.currentStep = GENERATING_TRANSACTION
+            // Retrieve IOU specified by linearId from the vault.
+            val queryCriteria = QueryCriteria.LinearStateQueryCriteria(linearId = listOf(IOUId))
+            val iou = serviceHub.vaultService.queryBy<IOUState>(queryCriteria).states.singleOrNull()
+                ?: throw FlowException("Obligation with id $IOUId not found.")
+            // Retrieve the notary from the input state
+            val notary = iou.state.notary
+            // Gathering keys and prepare destroy command
+            val lenderKey = iou.state.data.lender.owningKey
+            val destroyCommand = Command(IOUContract.Commands.Destroy(), lenderKey)
+            // build the transaction
+            val builder = TransactionBuilder(notary)
+                    .addInputState(iou)
+                    .addCommand(destroyCommand)
+
+            // Stage 2: Verifying Transaction
+            progressTracker.currentStep = VERIFYING_TRANSACTION
+            builder.verify(serviceHub)
+
+            // Stage 3
+            progressTracker.currentStep = SIGNING_TRANSACTION
+            val tx = serviceHub.signInitialTransaction(builder, lenderKey)
+
+            // Stage 4
+            progressTracker.currentStep = FINALISING_TRANSACTION
+            // Notarise and record the transaction in both parties' vaults.
+            return subFlow(FinalityFlow(tx, FINALISING_TRANSACTION.childProgressTracker()))
+        }
+
+    }
+
     @InitiatingFlow
     @StartableByRPC
     class Initiator(val iouValue: Int,
@@ -42,7 +104,6 @@ object ExampleFlow {
             object GATHERING_SIGS : Step("Gathering the counterparty's signature.") {
                 override fun childProgressTracker() = CollectSignaturesFlow.tracker()
             }
-
             object FINALISING_TRANSACTION : Step("Obtaining notary signature and recording transaction.") {
                 override fun childProgressTracker() = FinalityFlow.tracker()
             }
@@ -69,7 +130,10 @@ object ExampleFlow {
             // Stage 1.
             progressTracker.currentStep = GENERATING_TRANSACTION
             // Generate an unsigned transaction.
-            val iouState = IOUState(iouValue, serviceHub.myInfo.legalIdentities.first(), otherParty)
+            val iouState = IOUState(
+                    value = iouValue,
+                    lender = serviceHub.myInfo.legalIdentities.first(),
+                    borrower = otherParty)
             val txCommand = Command(IOUContract.Commands.Create(), iouState.participants.map { it.owningKey })
             val txBuilder = TransactionBuilder(notary)
                     .addOutputState(iouState, IOU_CONTRACT_ID)
